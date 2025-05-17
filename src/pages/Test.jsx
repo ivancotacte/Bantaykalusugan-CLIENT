@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 
@@ -8,6 +7,7 @@ export default function TestDashboard() {
     SpO2: "--",
     weight: "--",
     timestamp: null,
+    type: null,
   });
 
   useEffect(() => {
@@ -20,7 +20,23 @@ export default function TestDashboard() {
     });
 
     socket.on("healthData", (payload) => {
-      setHealthData(payload);
+      if (payload.type === "health") {
+        setHealthData({
+          heartRate: payload.data.heartRate,
+          SpO2: payload.data.SpO2,
+          weight: "--", // Reset weight if new health data is received
+          timestamp: payload.data.timestamp,
+          type: "health",
+        });
+      } else if (payload.type === "weight") {
+        setHealthData({
+          heartRate: "--", // Reset heart rate if new weight data is received
+          SpO2: "--", // Reset SpO2 if new weight data is received
+          weight: payload.data.weight,
+          timestamp: payload.data.timestamp,
+          type: "weight",
+        });
+      }
     });
 
     return () => {
@@ -31,10 +47,16 @@ export default function TestDashboard() {
   return (
     <div>
       <h2>Live Health Updates</h2>
-      <p>Heart Rate: {healthData.heartRate} bpm</p>
-      <p>SpO₂: {healthData.SpO2}%</p>
-      <p>Weight: {healthData.weight} kg</p>
-      <p>Updated at: {new Date(healthData.timestamp).toLocaleTimeString()}</p>
+      {healthData.type === "health" && (
+        <>
+          <p>Heart Rate: {healthData.heartRate} bpm</p>
+          <p>SpO₂: {healthData.SpO2}%</p>
+        </>
+      )}
+      {healthData.type === "weight" && (
+        <p>Weight: {healthData.weight} kg</p>
+      )}
+      <p>Updated at: {healthData.timestamp ? new Date(healthData.timestamp).toLocaleTimeString() : "--"}</p>
     </div>
   );
 }
