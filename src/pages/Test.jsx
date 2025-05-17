@@ -1,14 +1,35 @@
+
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 
 export default function TestDashboard() {
   const [healthData, setHealthData] = useState({
-    heartRate: "--",
-    SpO2: "--",
-    weight: "--",
+    heartRate: null,
+    SpO2: null,
+    weight: null,
     timestamp: null,
-    type: null,
   });
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const data = Object.fromEntries(formData.entries());
+
+    try {
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/v1/test`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(data),
+      });
+
+      const result = await response.json();
+      console.log("Server response:", result);
+    } catch (error) {
+      console.error("Error submitting data:", error);
+    }
+  }
 
   useEffect(() => {
     const socket = io(import.meta.env.VITE_BACKEND_URL, {
@@ -20,23 +41,11 @@ export default function TestDashboard() {
     });
 
     socket.on("healthData", (payload) => {
-      if (payload.type === "health") {
-        setHealthData({
-          heartRate: payload.data.heartRate,
-          SpO2: payload.data.SpO2,
-          weight: "--", // Reset weight if new health data is received
-          timestamp: payload.data.timestamp,
-          type: "health",
-        });
-      } else if (payload.type === "weight") {
-        setHealthData({
-          heartRate: "--", // Reset heart rate if new weight data is received
-          SpO2: "--", // Reset SpO2 if new weight data is received
-          weight: payload.data.weight,
-          timestamp: payload.data.timestamp,
-          type: "weight",
-        });
-      }
+      console.log("Received health data:", payload);
+      setHealthData((prevData) => ({
+        ...prevData,
+        ...payload,
+      }));
     });
 
     return () => {
@@ -46,17 +55,15 @@ export default function TestDashboard() {
 
   return (
     <div>
-      <h2>Live Health Updates</h2>
-      {healthData.type === "health" && (
-        <>
-          <p>Heart Rate: {healthData.heartRate} bpm</p>
-          <p>SpO₂: {healthData.SpO2}%</p>
-        </>
-      )}
-      {healthData.type === "weight" && (
-        <p>Weight: {healthData.weight} kg</p>
-      )}
-      <p>Updated at: {healthData.timestamp ? new Date(healthData.timestamp).toLocaleTimeString() : "--"}</p>
+      <h1>Test Dashboard</h1>
+      <form onSubmit={handleSubmit}>
+        <h2>Received Data:</h2>
+        <p>Heart Rate: {healthData.heartRate}</p>
+        <p>SpO2: {healthData.SpO2}</p>
+        <p>Weight: {healthData.weight}</p>
+        <p>Timestamp: {healthData.timestamp}</p>
+        <button type="submit">Submit</button>
+      </form>
     </div>
   );
 }
