@@ -1,17 +1,31 @@
 import { useState, useEffect } from "react";
-import { GalleryVerticalEnd, HeartPulse, Activity, Scale, Check, Loader2 } from "lucide-react";
+import { GalleryVerticalEnd, HeartPulse, Activity, Scale, Check, Loader2, Users, Clock } from "lucide-react";
 import { io } from "socket.io-client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export function RegisterForm({ className, ...props }) {
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState("connecting");
+  const [countdown, setCountdown] = useState(120);
   const [formData, setFormData] = useState({
     firstName: "",
     lastName: "",
@@ -27,6 +41,18 @@ export function RegisterForm({ className, ...props }) {
     weight: null,
     timestamp: null,
   });
+  const [submissionState, setSubmissionState] = useState({
+    loading: false,
+    success: false,
+    error: false,
+  });
+  const [queueStatus, setQueueStatus] = useState({
+    inQueue: false,
+    position: null,
+    totalInQueue: 0,
+    currentUser: null
+  });
+  const [socket, setSocket] = useState(null);
 
   const handleInputChange = (e) => {
     const { id, value } = e.target;
@@ -60,8 +86,7 @@ export function RegisterForm({ className, ...props }) {
       const data = await response.json();
       if (data.success) {
         setUserId(data.data.userId);
-        setIsSubmitted(true);
-        setIsAnimating(true);
+        checkQueueStatus(data.data.userId);
       } else {
         alert(data.message || "Registration failed. Please try again.");
       }
@@ -73,7 +98,85 @@ export function RegisterForm({ className, ...props }) {
     }
   };
 
+  const checkQueueStatus = async (userId) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/v1/queue/status`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_API_KEY}`
+        },
+        body: JSON.stringify({ userId })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        if (data.data.canProceed) {
+          setIsSubmitted(true);
+          setIsAnimating(true);
+          setQueueStatus({
+            inQueue: false,
+            position: 0,
+            totalInQueue: 0,
+            currentUser: userId
+          });
+        } else {
+          setQueueStatus({
+            inQueue: true,
+            position: data.data.position,
+            totalInQueue: data.data.totalInQueue,
+            currentUser: data.data.currentUser
+          });
+          startQueuePolling(userId);
+        }
+      }
+    } catch (error) {
+      console.error("Queue check error:", error);
+    }
+  };
+
+  const startQueuePolling = (userId) => {
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/v1/queue/status`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${import.meta.env.VITE_API_KEY}`
+          },
+          body: JSON.stringify({ userId })
+        });
+
+        const data = await response.json();
+        if (data.success && data.data.canProceed) {
+          clearInterval(interval);
+          setIsSubmitted(true);
+          setIsAnimating(true);
+          setQueueStatus({
+            inQueue: false,
+            position: 0,
+            totalInQueue: 0,
+            currentUser: userId
+          });
+        } else if (data.success) {
+          setQueueStatus({
+            inQueue: true,
+            position: data.data.position,
+            totalInQueue: data.data.totalInQueue,
+            currentUser: data.data.currentUser
+          });
+        }
+      } catch (error) {
+        console.error("Queue polling error:", error);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  };
+
   const handleHealthDataSubmit = async () => {
+    setSubmissionState({ loading: true, success: false, error: false });
+    
     try {
       const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/v1/users`, {
         method: "POST",
@@ -93,30 +196,80 @@ export function RegisterForm({ className, ...props }) {
         throw new Error("Failed to save health data");
       }
       
-      alert("Health data saved successfully!");
+      setSubmissionState({ loading: false, success: true, error: false });
+      
+      await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/v1/queue/complete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_API_KEY}`
+        },
+        body: JSON.stringify({ userId })
+      });
+
     } catch (error) {
       console.error("Health data submission error:", error);
-      alert("Failed to save health data. Please try again.");
+      setSubmissionState({ loading: false, success: false, error: true });
+    }
+  };
+
+  const resetForm = () => {
+    setIsSubmitted(false);
+    setSubmissionState({ loading: false, success: false, error: false });
+    setHealthData({
+      heartRate: null,
+      SpO2: null,
+      weight: null,
+      timestamp: null,
+    });
+    setFormData({
+      firstName: "",
+      lastName: "",
+      email: "",
+      age: "",
+      contactNumber: "",
+      gender: ""
+    });
+    setQueueStatus({
+      inQueue: false,
+      position: null,
+      totalInQueue: 0,
+      currentUser: null
+    });
+
+    if (userId) {
+      fetch(`${import.meta.env.VITE_BACKEND_URL}/api/v1/queue/leave`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_API_KEY}`
+        },
+        body: JSON.stringify({ userId })
+      }).catch(console.error);
+    }
+
+    if (socket) {
+      socket.disconnect();
     }
   };
 
   useEffect(() => {
     if (!isSubmitted) return;
 
-    const socket = io(import.meta.env.VITE_BACKEND_URL, {
+    const newSocket = io(import.meta.env.VITE_BACKEND_URL, {
       withCredentials: true,
     });
 
-    socket.on("connect", () => {
-      console.log("Connected to socket:", socket.id);
+    newSocket.on("connect", () => {
+      console.log("Connected to socket:", newSocket.id);
       setConnectionStatus("connected");
     });
     
-    socket.on("disconnect", () => {
+    newSocket.on("disconnect", () => {
       setConnectionStatus("disconnected");
     });
     
-    socket.on("healthData", (payload) => {
+    newSocket.on("healthData", (payload) => {
       console.log("Received health data:", payload);
       setHealthData((prevData) => ({
         ...prevData,
@@ -124,14 +277,188 @@ export function RegisterForm({ className, ...props }) {
       }));
     });
 
-    return () => socket.disconnect();
+    newSocket.on("queueUpdate", (data) => {
+      if (data.userId === userId && data.canProceed) {
+        setIsSubmitted(true);
+        setIsAnimating(true);
+        setQueueStatus({
+          inQueue: false,
+          position: 0,
+          totalInQueue: 0,
+          currentUser: userId
+        });
+      }
+    });
+
+    setSocket(newSocket);
+
+    return () => newSocket.disconnect();
+  }, [isSubmitted, userId]);
+
+  useEffect(() => {
+    if (isSubmitted && 
+        healthData.heartRate && 
+        healthData.SpO2 && 
+        healthData.weight && 
+        !submissionState.loading && 
+        !submissionState.success) {
+      handleHealthDataSubmit();
+    }
+  }, [healthData, isSubmitted]);
+
+  useEffect(() => {
+    if (isSubmitted) {
+      const interval = setInterval(() => {
+        setCountdown(prev => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            resetForm();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(interval);
+    }
   }, [isSubmitted]);
+
+  if (queueStatus.inQueue) {
+    return (
+      <div className={cn("flex flex-col items-center justify-center gap-8 p-6 h-screen", className)} {...props}>
+        <div className="text-center space-y-6 max-w-md">
+          <div className="flex flex-col items-center gap-4">
+            <div className="bg-blue-100 p-4 rounded-full">
+              <Clock className="h-8 w-8 text-blue-600" />
+            </div>
+            <h1 className="text-2xl font-bold">You're in Queue</h1>
+            <p className="text-muted-foreground">
+              Please wait for your turn to use the health monitoring system.
+            </p>
+          </div>
+          
+          <div className="bg-card rounded-lg p-6 shadow-sm w-full">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Users className="h-6 w-6 text-primary" />
+                <div>
+                  <h3 className="font-medium">Your Position</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {queueStatus.totalInQueue} {queueStatus.totalInQueue === 1 ? 'person' : 'people'} in queue
+                  </p>
+                </div>
+              </div>
+              <span className="text-2xl font-bold">{queueStatus.position}</span>
+            </div>
+          </div>
+          
+          <div className="text-sm text-muted-foreground">
+            <p>Estimated wait time: {Math.max(1, queueStatus.position) * 2} minutes</p>
+          </div>
+          
+          <Button 
+            variant="outline" 
+            className="w-full" 
+            onClick={resetForm}
+          >
+            Leave Queue
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (isSubmitted) {
     return (
       <div className={cn("flex flex-col items-center gap-8 p-6", className)} {...props}>
+        {/* Success Dialog */}
+        <Dialog open={submissionState.success} onOpenChange={() => {}}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <div className="flex justify-center">
+                <div className="rounded-full bg-green-100 p-4">
+                  <Check className="h-8 w-8 text-green-600" />
+                </div>
+              </div>
+              <DialogTitle className="text-center mt-4">Health Data Submitted!</DialogTitle>
+              <DialogDescription className="text-center">
+                Your health metrics have been successfully recorded.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-center mt-4">
+              <Button 
+                className="w-full max-w-xs" 
+                onClick={resetForm}
+              >
+                Register Another User
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Loading Dialog */}
+        <Dialog open={submissionState.loading} onOpenChange={() => {}}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <div className="flex justify-center">
+                <Loader2 className="h-8 w-8 animate-spin" />
+              </div>
+              <DialogTitle className="text-center mt-4">Submitting Health Data</DialogTitle>
+              <DialogDescription className="text-center">
+                Please wait while we save your health metrics...
+              </DialogDescription>
+            </DialogHeader>
+          </DialogContent>
+        </Dialog>
+
+        {/* Error Dialog */}
+        <Dialog open={submissionState.error} onOpenChange={() => setSubmissionState(prev => ({ ...prev, error: false }))}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <div className="flex justify-center">
+                <div className="rounded-full bg-red-100 p-4">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-8 w-8 text-red-600"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                </div>
+              </div>
+              <DialogTitle className="text-center mt-4">Submission Failed</DialogTitle>
+              <DialogDescription className="text-center">
+                There was an error saving your health data. Please try again.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-center mt-4">
+              <Button 
+                variant="outline" 
+                className="w-full max-w-xs mr-2" 
+                onClick={() => setSubmissionState(prev => ({ ...prev, error: false }))}
+              >
+                Cancel
+              </Button>
+              <Button 
+                className="w-full max-w-xs" 
+                onClick={handleHealthDataSubmit}
+              >
+                Retry
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
         <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold">Registration Successful!</h1>
+          <h1 className="text-2xl font-bold">
+            {submissionState.success ? "Health Data Recorded" : "Registration Successful!"}
+          </h1>
           <div className="flex items-center justify-center gap-2 text-muted-foreground">
             {connectionStatus === "connecting" && (
               <>
@@ -139,7 +466,7 @@ export function RegisterForm({ className, ...props }) {
                 <span>Connecting to your health monitoring device...</span>
               </>
             )}
-            {connectionStatus === "connected" && (
+            {connectionStatus === "connected" && !submissionState.success && (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
                 <span>Waiting for data from device...</span>
@@ -157,6 +484,9 @@ export function RegisterForm({ className, ...props }) {
               </>
             )}
           </div>
+          <p className="text-sm text-muted-foreground">
+            Returning to registration in {countdown} seconds...
+          </p>
         </div>
 
         <div className="w-full max-w-md space-y-8">
@@ -254,29 +584,18 @@ export function RegisterForm({ className, ...props }) {
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex gap-4">
-            <Button 
-              variant="outline" 
-              className="w-full" 
-              onClick={() => setIsSubmitted(false)}
-            >
-              Back
-            </Button>
-            <Button 
-              className="w-full" 
-              onClick={handleHealthDataSubmit}
-              disabled={!healthData.heartRate || !healthData.SpO2 || !healthData.weight}
-            >
-              Submit Health Data
-            </Button>
-          </div>
+          <Button 
+            variant="outline" 
+            className="w-full" 
+            onClick={resetForm}
+          >
+            Back to Registration
+          </Button>
         </div>
       </div>
     );
   }
 
-  // Registration form view
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <form onSubmit={handleRegisterSubmit}>
@@ -295,7 +614,6 @@ export function RegisterForm({ className, ...props }) {
           </div>
           
           <div className="flex flex-col gap-6">
-            {/* Personal Information */}
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-3">
                 <Label htmlFor="firstName">First Name</Label>
@@ -321,7 +639,6 @@ export function RegisterForm({ className, ...props }) {
               </div>
             </div>
             
-            {/* Contact Information */}
             <div className="grid gap-3">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -361,7 +678,6 @@ export function RegisterForm({ className, ...props }) {
               </div>
             </div>
             
-            {/* Gender Selection */}
             <div className="grid gap-3">
               <Label htmlFor="gender">Gender</Label>
               <Select
@@ -379,7 +695,6 @@ export function RegisterForm({ className, ...props }) {
               </Select>
             </div>
             
-            {/* Submit Button */}
             <Button type="submit" className="w-full" disabled={isLoading}>
               {isLoading ? (
                 <>
@@ -392,12 +707,10 @@ export function RegisterForm({ className, ...props }) {
         </div>
       </form>
       
-      {/* Footer */}
       <div className="text-muted-foreground *:[a]:hover:text-primary text-center text-xs text-balance *:[a]:underline *:[a]:underline-offset-4">
         By clicking continue, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>.
       </div>
 
-      {/* Animation Styles */}
       <style jsx>{`
         @keyframes pulse {
           0% { transform: scaleY(0.9); opacity: 0.7; }
